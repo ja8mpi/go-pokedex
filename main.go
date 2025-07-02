@@ -8,6 +8,9 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
+
+	"github.com/ja8mpi/go-pokecache"
 )
 
 type pokeResponse struct {
@@ -25,6 +28,7 @@ type pokeEntry struct {
 type config struct {
 	Next     string
 	Previous string
+	cache    pokecache.Cache
 }
 
 type cliCommand struct {
@@ -80,7 +84,26 @@ func commandHelp(cfg *config) error {
 	return nil
 }
 
+func makeMapRequest(url string) {}
+
 func commandMap(cfg *config) error {
+	data, exists := cfg.cache.Get(cfg.Next)
+	if exists {
+		var response pokeResponse
+
+		err := json.Unmarshal(data, &response)
+
+		if err != nil {
+			return err
+		} else {
+			for _, loc := range response.Results {
+				fmt.Println(loc.Name)
+			}
+
+			cfg.Next = response.Next
+			cfg.Previous = response.Previous
+		}
+	}
 
 	res, err := http.Get(cfg.Next)
 	if err != nil {
@@ -114,7 +137,25 @@ func commandMap(cfg *config) error {
 }
 
 func commandMapb(cfg *config) error {
-	if cfg.Next == "" {
+	data, exists := cfg.cache.Get(cfg.Previous)
+	if exists {
+		var response pokeResponse
+
+		err := json.Unmarshal(data, &response)
+
+		if err != nil {
+			return err
+		} else {
+			for _, loc := range response.Results {
+				fmt.Println(loc.Name)
+			}
+
+			cfg.Next = response.Next
+			cfg.Previous = response.Previous
+		}
+	}
+
+	if cfg.Previous == "" {
 		fmt.Println("you're on the first page")
 		return nil
 	}
@@ -160,6 +201,7 @@ func main() {
 	cfg := config{
 		Previous: "",
 		Next:     "https://pokeapi.co/api/v2/location-area/?offset=0&limit=20",
+		cache:    *pokecache.NewCache(5 * time.Minute),
 	}
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -170,6 +212,10 @@ func main() {
 		}
 		input := cleanInput(scanner.Text())
 
+		if len(input) == 0 {
+			continue
+		}
+
 		cmd, ok := commands[input[0]]
 
 		if !ok {
@@ -177,7 +223,9 @@ func main() {
 			continue
 		}
 
-		cmd.callback(&cfg)
+		if err := cmd.callback(&cfg); err != nil {
+			fmt.Println("Error:", err)
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
