@@ -2,15 +2,36 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strings"
 )
 
+type pokeResponse struct {
+	Count    int         `json:"count"`
+	Next     string      `json:"next"`
+	Previous string      `json:"previous"`
+	Results  []pokeEntry `json:"results"`
+}
+
+type pokeEntry struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+type config struct {
+	Next     string
+	Previous string
+}
+
 type cliCommand struct {
 	name        string
 	description string
-	callback    func() error
+	callback    func(*config) error
+	cfg         *config
 }
 
 var commands = map[string]cliCommand{
@@ -21,8 +42,13 @@ var commands = map[string]cliCommand{
 	},
 	"map": {
 		name:        "map",
-		description: "Exit the Pokedex",
-		callback:    commandExit,
+		description: "Displays 20 location areas of the Pokemon world per call, showing the next 20 locations on each subsequent call",
+		callback:    commandMap,
+	},
+	"mapb": {
+		name:        "mapb",
+		description: "Displays 20 location areas of the Pokemon world per call, showing the next 20 locations on each subsequent call",
+		callback:    commandMapb,
 	},
 }
 
@@ -37,13 +63,13 @@ func cleanInput(text string) []string {
 	return words
 }
 
-func commandExit() error {
+func commandExit(cfg *config) error {
 	fmt.Println("Closing the Pokedex... Goodbye!")
 	os.Exit(0)
 	return nil
 }
 
-func commandHelp() error {
+func commandHelp(cfg *config) error {
 	fmt.Println("Welcome to the Pokedex!")
 	fmt.Println("Usage:\n")
 
@@ -54,12 +80,88 @@ func commandHelp() error {
 	return nil
 }
 
+func commandMap(cfg *config) error {
+
+	res, err := http.Get(cfg.Next)
+	if err != nil {
+		return err
+	}
+
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err
+	}
+	if res.StatusCode > 299 {
+		return fmt.Errorf("response failed with status code: %d and\nbody: %s", res.StatusCode, body)
+	}
+
+	var response pokeResponse
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		return fmt.Errorf("failed to parse JSON: %v", err)
+	}
+
+	for _, loc := range response.Results {
+		fmt.Println(loc.Name)
+	}
+
+	cfg.Next = response.Next
+	cfg.Previous = response.Previous
+
+	return nil
+}
+
+func commandMapb(cfg *config) error {
+	if cfg.Next == "" {
+		fmt.Println("you're on the first page")
+		return nil
+	}
+
+	res, err := http.Get(cfg.Previous)
+	if err != nil {
+		return err
+	}
+
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err
+	}
+	if res.StatusCode > 299 {
+		return fmt.Errorf("response failed with status code: %d and\nbody: %s", res.StatusCode, body)
+	}
+
+	var response pokeResponse
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		return fmt.Errorf("failed to parse JSON: %v", err)
+	}
+
+	for _, loc := range response.Results {
+		fmt.Println(loc.Name)
+	}
+
+	cfg.Next = response.Next
+	cfg.Previous = response.Previous
+
+	return nil
+}
+
 func main() {
 	commands["help"] = cliCommand{
 		name:        "help",
 		description: "Displays a help message",
 		callback:    commandHelp,
 	}
+
+	cfg := config{
+		Previous: "",
+		Next:     "https://pokeapi.co/api/v2/location-area/?offset=0&limit=20",
+	}
+
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print("Pokedex > ")
@@ -75,7 +177,7 @@ func main() {
 			continue
 		}
 
-		cmd.callback()
+		cmd.callback(&cfg)
 	}
 
 	if err := scanner.Err(); err != nil {
