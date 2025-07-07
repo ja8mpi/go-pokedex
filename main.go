@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"strings"
@@ -12,6 +13,35 @@ import (
 
 	"github.com/ja8mpi/go-pokecache"
 )
+
+type Pokemon struct {
+	BaseExperience int    `json:"base_experience"`
+	Weight         int    `json:"weight"`
+	Height         int    `json:"height"`
+	Stats          []Stat `json:"stats"`
+	Types          []Type `json:"types"`
+}
+
+type Type struct {
+	Slot int      `json:"slot"`
+	Type TypeInfo `json:"type"`
+}
+
+type TypeInfo struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+type Stat struct {
+	BaseStat int        `json:"base_stat"`
+	Effort   int        `json:"effort"`
+	StatInfo StatDetail `json:"stat"`
+}
+
+type StatDetail struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
 
 type pokeResponse struct {
 	Count    int         `json:"count"`
@@ -29,16 +59,17 @@ type LocationDetails struct {
 	PokemonEncounters []PokemonEncounter `json:"pokemon_encounters"`
 }
 
-type Pokemon struct {
+type PokemonEntry struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
 }
 
 type PokemonEncounter struct {
-	Pokemon Pokemon `json:"pokemon"`
+	Pokemon PokemonEntry `json:"pokemon"`
 }
 
 type config struct {
+	Pokedex       map[string]Pokemon
 	Next          string
 	Previous      string
 	locationCache pokecache.Cache
@@ -73,11 +104,21 @@ var commands = map[string]cliCommand{
 		description: "Displays the pokemons that you may encounter in a given area",
 		callback:    commandExplore,
 	},
-	"catch":{
+	"catch": {
 		name:        "catch",
 		description: "Catches a pokemon and adds them ot the user's pokedex.",
 		callback:    commandCatch,
-	}
+	},
+	"inspect": {
+		name:        "inspect",
+		description: "It takes the name of a Pokemon and prints the name, height, weight, stats and type(s) of the Pokemon if it was caught before.",
+		callback:    commandInspect,
+	},
+	"pokedex": {
+		name:        "pokedex",
+		description: "Prints the names of the pokemons a user has caught",
+		callback:    commandPokedex,
+	},
 }
 
 func cleanInput(text string) []string {
@@ -277,29 +318,11 @@ func commandExplore(cfg *config, params ...string) error {
 
 func commandCatch(cfg *config, params ...string) error {
 	if len(params) < 1 {
-		return fmt.Errorf("missing location parameter")
+		return fmt.Errorf("missing pokemon parameter")
 	}
-	location := params[0]
+	name := params[0]
 
-	data, exists := cfg.pokemonCache.Get(location)
-	if exists {
-		var encounters []PokemonEncounter
-
-		err := json.Unmarshal(data, &encounters)
-		if err != nil {
-			return fmt.Errorf("failed to parse cached encounters: %v", err)
-		}
-
-		fmt.Printf("Exploring %s...\n", location)
-		fmt.Println("Found Pokemon:")
-		for _, entry := range encounters {
-			fmt.Printf(" - %v\n", entry.Pokemon.Name)
-		}
-
-		return nil
-	}
-
-	res, err := http.Get(fmt.Sprintf("https://pokeapi.co/api/v2/location-area/%v", location))
+	res, err := http.Get(fmt.Sprintf("https://pokeapi.co/api/v2/pokemon/%v", name))
 	if err != nil {
 		return err
 	}
@@ -312,26 +335,72 @@ func commandCatch(cfg *config, params ...string) error {
 		return fmt.Errorf("response failed with status code: %d and\nbody: %s", res.StatusCode, body)
 	}
 
-	var response LocationDetails
+	var response Pokemon
 	err = json.Unmarshal(body, &response)
 	if err != nil {
 		return fmt.Errorf("failed to parse JSON: %v", err)
 	}
 
-	fmt.Println("Exploring pastoria-city-area...")
-	fmt.Println("Found Pokemon:")
+	fmt.Printf("Throwing a Pokeball at %v...\n", name)
+	baseExp := response.BaseExperience
 
-	for _, entry := range response.PokemonEncounters {
-
-		fmt.Printf(" - %v\n", entry.Pokemon.Name)
+	// Calculate catch chance
+	catchChance := 80.0 - float64(baseExp)*0.3
+	if catchChance < 10.0 {
+		catchChance = 10.0
 	}
 
-	body, err = json.Marshal(response.PokemonEncounters)
-	if err != nil {
-		return fmt.Errorf("failed to serialize Pokémon encounters: %v", err)
+	// Roll a random number from 0.0 to 100.0
+	roll := rand.Float64() * 100
+
+	if roll <= catchChance {
+		fmt.Printf("%v was caught!\n", name)
+
+		cfg.Pokedex[name] = response
+	} else {
+		fmt.Printf("%v escaped!\n", name)
 	}
 
-	cfg.pokemonCache.Add(params[0], body)
+	return nil
+}
+
+func commandPokedex(cfg *config, params ...string) error {
+	if len(cfg.Pokedex) <= 0 {
+		fmt.Println("Your pokedex is empty. Catch some pokemons!")
+		return fmt.Errorf("Empty pokedex")
+	}
+
+	for key, _ := range cfg.Pokedex {
+		fmt.Printf(" - %v\n", key)
+	}
+
+	return nil
+}
+
+func commandInspect(cfg *config, params ...string) error {
+	if len(params) < 1 {
+		return fmt.Errorf("missing pokemon parameter")
+	}
+	name := params[0]
+	pokemon, exists := cfg.Pokedex[name]
+	if !exists {
+		fmt.Println("Pokemon not found in the map!")
+		return fmt.Errorf("Pokemon not found in the map!")
+	} else {
+		fmt.Printf("Name: %s\n", name)
+		fmt.Printf("Height: %d\n", pokemon.Height)
+		fmt.Printf("Weight: %d\n", pokemon.Weight)
+
+		for _, stat := range pokemon.Stats {
+			fmt.Printf("  -%v: %v\n", stat.StatInfo.Name, stat.BaseStat)
+		}
+		fmt.Println("Types: ")
+
+		for _, pokemonType := range pokemon.Types {
+			fmt.Printf("  -%v\n", pokemonType.Type.Name)
+		}
+	}
+
 	return nil
 }
 
@@ -347,6 +416,7 @@ func main() {
 		Next:          "https://pokeapi.co/api/v2/location-area/?offset=0&limit=20",
 		locationCache: *pokecache.NewCache(5 * time.Minute),
 		pokemonCache:  *pokecache.NewCache(5 * time.Minute),
+		Pokedex:       map[string]Pokemon{},
 	}
 
 	scanner := bufio.NewScanner(os.Stdin)
