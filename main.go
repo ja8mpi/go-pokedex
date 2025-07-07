@@ -25,16 +25,30 @@ type pokeEntry struct {
 	URL  string `json:"url"`
 }
 
+type LocationDetails struct {
+	PokemonEncounters []PokemonEncounter `json:"pokemon_encounters"`
+}
+
+type Pokemon struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+type PokemonEncounter struct {
+	Pokemon Pokemon `json:"pokemon"`
+}
+
 type config struct {
-	Next     string
-	Previous string
-	cache    pokecache.Cache
+	Next          string
+	Previous      string
+	locationCache pokecache.Cache
+	pokemonCache  pokecache.Cache
 }
 
 type cliCommand struct {
 	name        string
 	description string
-	callback    func(*config) error
+	callback    func(*config, ...string) error
 	cfg         *config
 }
 
@@ -51,9 +65,19 @@ var commands = map[string]cliCommand{
 	},
 	"mapb": {
 		name:        "mapb",
-		description: "Displays 20 location areas of the Pokemon world per call, showing the next 20 locations on each subsequent call",
+		description: "Displays 20 location areas of the Pokemon world per call, showing the previous 20 locations on each subsequent call",
 		callback:    commandMapb,
 	},
+	"explore": {
+		name:        "explore",
+		description: "Displays the pokemons that you may encounter in a given area",
+		callback:    commandExplore,
+	},
+	"catch":{
+		name:        "catch",
+		description: "Catches a pokemon and adds them ot the user's pokedex.",
+		callback:    commandCatch,
+	}
 }
 
 func cleanInput(text string) []string {
@@ -67,13 +91,13 @@ func cleanInput(text string) []string {
 	return words
 }
 
-func commandExit(cfg *config) error {
+func commandExit(cfg *config, params ...string) error {
 	fmt.Println("Closing the Pokedex... Goodbye!")
 	os.Exit(0)
 	return nil
 }
 
-func commandHelp(cfg *config) error {
+func commandHelp(cfg *config, params ...string) error {
 	fmt.Println("Welcome to the Pokedex!")
 	fmt.Println("Usage:\n")
 
@@ -86,8 +110,8 @@ func commandHelp(cfg *config) error {
 
 func makeMapRequest(url string) {}
 
-func commandMap(cfg *config) error {
-	data, exists := cfg.cache.Get(cfg.Next)
+func commandMap(cfg *config, params ...string) error {
+	data, exists := cfg.locationCache.Get(cfg.Next)
 	if exists {
 		var response pokeResponse
 
@@ -136,8 +160,8 @@ func commandMap(cfg *config) error {
 	return nil
 }
 
-func commandMapb(cfg *config) error {
-	data, exists := cfg.cache.Get(cfg.Previous)
+func commandMapb(cfg *config, params ...string) error {
+	data, exists := cfg.locationCache.Get(cfg.Previous)
 	if exists {
 		var response pokeResponse
 
@@ -191,6 +215,126 @@ func commandMapb(cfg *config) error {
 	return nil
 }
 
+func commandExplore(cfg *config, params ...string) error {
+	if len(params) < 1 {
+		return fmt.Errorf("missing location parameter")
+	}
+	location := params[0]
+
+	data, exists := cfg.pokemonCache.Get(location)
+	if exists {
+		var encounters []PokemonEncounter
+
+		err := json.Unmarshal(data, &encounters)
+		if err != nil {
+			return fmt.Errorf("failed to parse cached encounters: %v", err)
+		}
+
+		fmt.Printf("Exploring %s...\n", location)
+		fmt.Println("Found Pokemon:")
+		for _, entry := range encounters {
+			fmt.Printf(" - %v\n", entry.Pokemon.Name)
+		}
+
+		return nil
+	}
+
+	res, err := http.Get(fmt.Sprintf("https://pokeapi.co/api/v2/location-area/%v", location))
+	if err != nil {
+		return err
+	}
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err
+	}
+	if res.StatusCode > 299 {
+		return fmt.Errorf("response failed with status code: %d and\nbody: %s", res.StatusCode, body)
+	}
+
+	var response LocationDetails
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		return fmt.Errorf("failed to parse JSON: %v", err)
+	}
+
+	fmt.Println("Exploring pastoria-city-area...")
+	fmt.Println("Found Pokemon:")
+
+	for _, entry := range response.PokemonEncounters {
+
+		fmt.Printf(" - %v\n", entry.Pokemon.Name)
+	}
+
+	body, err = json.Marshal(response.PokemonEncounters)
+	if err != nil {
+		return fmt.Errorf("failed to serialize Pokémon encounters: %v", err)
+	}
+
+	cfg.pokemonCache.Add(params[0], body)
+	return nil
+}
+
+func commandCatch(cfg *config, params ...string) error {
+	if len(params) < 1 {
+		return fmt.Errorf("missing location parameter")
+	}
+	location := params[0]
+
+	data, exists := cfg.pokemonCache.Get(location)
+	if exists {
+		var encounters []PokemonEncounter
+
+		err := json.Unmarshal(data, &encounters)
+		if err != nil {
+			return fmt.Errorf("failed to parse cached encounters: %v", err)
+		}
+
+		fmt.Printf("Exploring %s...\n", location)
+		fmt.Println("Found Pokemon:")
+		for _, entry := range encounters {
+			fmt.Printf(" - %v\n", entry.Pokemon.Name)
+		}
+
+		return nil
+	}
+
+	res, err := http.Get(fmt.Sprintf("https://pokeapi.co/api/v2/location-area/%v", location))
+	if err != nil {
+		return err
+	}
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err
+	}
+	if res.StatusCode > 299 {
+		return fmt.Errorf("response failed with status code: %d and\nbody: %s", res.StatusCode, body)
+	}
+
+	var response LocationDetails
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		return fmt.Errorf("failed to parse JSON: %v", err)
+	}
+
+	fmt.Println("Exploring pastoria-city-area...")
+	fmt.Println("Found Pokemon:")
+
+	for _, entry := range response.PokemonEncounters {
+
+		fmt.Printf(" - %v\n", entry.Pokemon.Name)
+	}
+
+	body, err = json.Marshal(response.PokemonEncounters)
+	if err != nil {
+		return fmt.Errorf("failed to serialize Pokémon encounters: %v", err)
+	}
+
+	cfg.pokemonCache.Add(params[0], body)
+	return nil
+}
+
 func main() {
 	commands["help"] = cliCommand{
 		name:        "help",
@@ -199,9 +343,10 @@ func main() {
 	}
 
 	cfg := config{
-		Previous: "",
-		Next:     "https://pokeapi.co/api/v2/location-area/?offset=0&limit=20",
-		cache:    *pokecache.NewCache(5 * time.Minute),
+		Previous:      "",
+		Next:          "https://pokeapi.co/api/v2/location-area/?offset=0&limit=20",
+		locationCache: *pokecache.NewCache(5 * time.Minute),
+		pokemonCache:  *pokecache.NewCache(5 * time.Minute),
 	}
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -223,7 +368,8 @@ func main() {
 			continue
 		}
 
-		if err := cmd.callback(&cfg); err != nil {
+		params := input[1:] // everything after the command
+		if err := cmd.callback(&cfg, params...); err != nil {
 			fmt.Println("Error:", err)
 		}
 	}
